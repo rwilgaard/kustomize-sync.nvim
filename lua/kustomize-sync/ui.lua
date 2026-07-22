@@ -9,9 +9,9 @@ local BATCH_NS = vim.api.nvim_create_namespace("kustomize_batch")
 
 M.interactive_sync = function(ctx, opts)
   local dir = ctx.is_dir and ctx.path or vim.fn.fnamemodify(ctx.path, ":h")
-  local target = dir .. "/kustomization.yaml"
+  local target = sync.find_kustomization(dir)
 
-  if vim.fn.filereadable(target) ~= 1 then
+  if not target then
     vim.notify("No kustomization.yaml found", vim.log.levels.WARN)
     return
   end
@@ -32,11 +32,12 @@ M.interactive_sync = function(ctx, opts)
     local max_len = 0
 
     if handle then
+      local commented = sync.commented_set(target)
       while true do
         local name, type = vim.uv.fs_scandir_next(handle)
         if not name then break end
-        if name ~= "kustomization.yaml" and (type == "directory" or name:match("%.yaml$"))
-            and not sync.is_commented_out(name, target) then
+        if not sync.is_kustomization(name) and (type == "directory" or sync.is_yaml(name))
+            and not commented[name] then
           local clean_name = name:gsub("/$", "")
           table.insert(raw_items, { name = clean_name, is_active = res_map[clean_name] == true })
           if #clean_name > max_len then max_len = #clean_name end
@@ -112,7 +113,11 @@ M.interactive_sync = function(ctx, opts)
 end
 
 M.batch_handle_changes = function(changes, refresh, opts)
-  if vim.fn.executable("yq") ~= 1 then return end
+  if vim.fn.executable("yq") ~= 1 then
+    vim.notify("yq not found", vim.log.levels.ERROR)
+    if refresh then refresh() end
+    return
+  end
 
   local seen  = {}
   local items = {}

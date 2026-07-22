@@ -19,7 +19,7 @@ M.get_ctx = function()
   }
 end
 
-local function setup()
+function M.setup()
   local oil_config = config.options.integrations.oil
 
   if oil_config.auto_prompt_on_change then
@@ -48,7 +48,5 @@ local function setup()
     })
   end
 end
-
-setup()
 
 return M

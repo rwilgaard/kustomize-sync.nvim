@@ -14,11 +14,14 @@ M.get_ctx = function(state)
   }
 end
 
-local function setup()
+local registered = false
+
+function M.setup()
   local nt_config = config.options.integrations.neo_tree
 
   -- Setup event handlers
-  if nt_config.auto_prompt_on_change then
+  if nt_config.auto_prompt_on_change and not registered then
+    registered = true
     local function register()
       local ok_ev, evs = pcall(require, "neo-tree.events")
       if not ok_ev then return end
@@ -49,7 +52,5 @@ local function setup()
     end
   end
 end
-
-setup()
 
 return M

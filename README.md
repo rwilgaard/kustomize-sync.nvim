@@ -12,7 +12,7 @@ A modular Neovim plugin for synchronizing and managing Kubernetes Kustomize mani
 
 ## Dependencies
 
-- Neovim >= 0.10.0
+- Neovim >= 0.11.0
 - [nui.nvim](https://github.com/MunifTanjim/nui.nvim)
 - **External CLIs:**
   - [yq](https://github.com/mikefarah/yq) (v4 recommended)

@@ -1,0 +1,77 @@
+*kustomize-sync.txt*     Sync Kustomize manifests from Neovim file explorers
+
+==============================================================================
+CONTENTS                                                *kustomize-sync-contents*
+
+  1. Introduction ............ |kustomize-sync-introduction|
+  2. Requirements ............ |kustomize-sync-requirements|
+  3. Setup ................... |kustomize-sync-setup|
+  4. Commands ................ |kustomize-sync-commands|
+  5. Integrations ............ |kustomize-sync-integrations|
+  6. Healthcheck ............. |kustomize-sync-health|
+
+==============================================================================
+1. INTRODUCTION                                     *kustomize-sync-introduction*
+
+kustomize-sync.nvim keeps a `kustomization.yaml` (or `.yml`) `.resources`
+list in sync with the files and directories on disk, driven from Neo-tree,
+Oil.nvim, or the active buffer.
+
+==============================================================================
+2. REQUIREMENTS                                     *kustomize-sync-requirements*
+
+- Neovim >= 0.11.0
+- nui.nvim (https://github.com/MunifTanjim/nui.nvim)
+- yq v4 (https://github.com/mikefarah/yq)
+- kustomize (optional; only to bootstrap a new kustomization via
+  `kustomize create`)
+
+==============================================================================
+3. SETUP                                                   *kustomize-sync-setup*
+
+Call `setup()` once. Defaults: >lua
+    require("kustomize-sync").setup({
+      sort_resources = true,
+      integrations = {
+        neo_tree = { enabled = true, auto_prompt_on_change = true },
+        oil      = { enabled = true, auto_prompt_on_change = true },
+      },
+    })
+<
+`sort_resources`         Alphabetically sort `.resources` on add.
+`auto_prompt_on_change`  Prompt to add/remove when files are created or
+                         deleted in the explorer.
+
+==============================================================================
+4. COMMANDS                                             *kustomize-sync-commands*
+
+                                                                *:KustomizeSync*
+:KustomizeSync           Sync the directory of the active buffer against its
+                         `kustomization.yaml`.
+
+                                                     *:KustomizeInteractiveSync*
+:KustomizeInteractiveSync
+                         Open a checkbox menu to toggle resources in the
+                         active buffer's directory.
+
+==============================================================================
+5. INTEGRATIONS                                     *kustomize-sync-integrations*
+
+Neo-tree and Oil are wired via `get_ctx()` helpers you bind to keymaps. See
+the README for full command/keymap examples.
+
+Neo-tree: >lua
+    local ctx = require("kustomize-sync.integrations.neo-tree").get_ctx(state)
+    require("kustomize-sync").sync(ctx)
+<
+Oil: >lua
+    local ctx = require("kustomize-sync.integrations.oil").get_ctx()
+    if ctx then require("kustomize-sync").sync(ctx) end
+<
+==============================================================================
+6. HEALTHCHECK                                           *kustomize-sync-health*
+
+Verify external CLI dependencies: >
+    :checkhealth kustomize-sync
+<
+ vim:tw=78:ts=8:ft=help:norl:

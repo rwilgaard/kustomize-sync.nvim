@@ -6,10 +6,12 @@ M.setup = function(opts)
   config.setup(opts)
 
   if config.options.integrations.neo_tree.enabled then
-    pcall(require, "kustomize-sync.integrations.neo-tree")
+    local ok, mod = pcall(require, "kustomize-sync.integrations.neo-tree")
+    if ok then mod.setup() end
   end
   if config.options.integrations.oil.enabled then
-    pcall(require, "kustomize-sync.integrations.oil")
+    local ok, mod = pcall(require, "kustomize-sync.integrations.oil")
+    if ok then mod.setup() end
   end
 end
 
