@@ -8,7 +8,7 @@ local M = {}
 local BATCH_NS = vim.api.nvim_create_namespace("kustomize_batch")
 
 M.interactive_sync = function(ctx, opts)
-  local dir = ctx.is_dir and ctx.path or vim.fn.fnamemodify(ctx.path, ":h")
+  local dir = sync.ctx_dir(ctx)
   local target = sync.find_kustomization(dir)
 
   if not target then
@@ -22,31 +22,21 @@ M.interactive_sync = function(ctx, opts)
   local calculated_height = 10
 
   local function fetch_items()
-    local current_json = sync.yq({ '.resources // [] | map(sub("/$", ""))', target, "-o", "json" })
-    local current_resources = current_json and vim.fn.json_decode(current_json) or {}
-    local res_map = {}
-    for _, r in ipairs(current_resources) do res_map[r] = true end
+    local _, res_map = sync.current_resources(target)
+    res_map = res_map or {}
 
-    local handle = vim.uv.fs_scandir(dir)
     local raw_items = {}
     local max_len = 0
 
-    if handle then
-      local commented = sync.commented_set(target)
-      while true do
-        local name, type = vim.uv.fs_scandir_next(handle)
-        if not name then break end
-        if sync.is_resource_entry(name, type) and not commented[name] then
-          local clean_name = name:gsub("/$", "")
-          local is_active = res_map[clean_name] == true
-          -- Entries that can't be added (a directory with no kustomization
-          -- file) are hidden unless they're already listed, in which case the
-          -- user still needs a way to toggle them off.
-          if is_active or sync.is_addable_entry(dir, name, type) then
-            table.insert(raw_items, { name = clean_name, is_active = is_active })
-            if #clean_name > max_len then max_len = #clean_name end
-          end
-        end
+    for name, addable in pairs(sync.scan_entries(dir, target) or {}) do
+      local clean_name = name:gsub("/$", "")
+      local is_active = res_map[clean_name] == true
+      -- Entries that can't be added (a directory with no kustomization file)
+      -- are hidden unless they're already listed, in which case the user still
+      -- needs a way to toggle them off.
+      if is_active or addable then
+        table.insert(raw_items, { name = clean_name, is_active = is_active })
+        if #clean_name > max_len then max_len = #clean_name end
       end
     end
 
@@ -88,6 +78,10 @@ M.interactive_sync = function(ctx, opts)
   vim.bo[menu_instance.bufnr].readonly = false
   vim.bo[menu_instance.bufnr].buftype = "nofile"
 
+  -- The menu session is the batch: every keystroke writes, but the formatter
+  -- runs once on close rather than spawning a process per checkbox.
+  local wrote = false
+
   local function toggle()
     local curr_win = menu_instance.winid
     local curr_buf = menu_instance.bufnr
@@ -98,6 +92,7 @@ M.interactive_sync = function(ctx, opts)
 
     local action = item.is_active and "remove" or "add"
     sync.execute_yq(action, item.name, target, opts)
+    wrote = true
 
     active_items = fetch_items()
     local new_lines = {}
@@ -113,13 +108,13 @@ M.interactive_sync = function(ctx, opts)
   menu_instance:map("n", "<Space>", toggle, { noremap = true, nowait = true })
 
   menu_instance:on("BufLeave", function()
+    if wrote then sync.run_formatter(target, opts) end
     if ctx.refresh then ctx.refresh() end
   end)
 end
 
 M.batch_handle_changes = function(changes, refresh, opts)
-  if vim.fn.executable("yq") ~= 1 then
-    vim.notify("yq not found", vim.log.levels.ERROR)
+  if not sync.require_cli("yq") then
     if refresh then refresh() end
     return
   end
@@ -132,13 +127,7 @@ M.batch_handle_changes = function(changes, refresh, opts)
       local key = change.op .. "\0" .. r.name .. "\0" .. r.kustomize_file
       if not seen[key] then
         seen[key] = true
-        table.insert(items, {
-          op              = change.op,
-          name            = r.name,
-          path            = r.path,
-          kustomize_file  = r.kustomize_file,
-          needs_bootstrap = r.needs_bootstrap,
-        })
+        table.insert(items, vim.tbl_extend("error", r, { op = change.op }))
       end
     end
   end
@@ -228,13 +217,11 @@ M.batch_handle_changes = function(changes, refresh, opts)
   end
 
   local function confirm()
+    local approved = {}
     for i, item in ipairs(items) do
-      if selected[i] then
-        if not item.needs_bootstrap or sync.bootstrap(item.path) then
-          sync.execute_yq(item.op, item.name, item.kustomize_file, opts)
-        end
-      end
+      if selected[i] then table.insert(approved, item) end
     end
+    sync.apply_changes(approved, opts)
     m:unmount()
   end
 
@@ -245,26 +232,26 @@ M.batch_handle_changes = function(changes, refresh, opts)
 end
 
 M.handle_change = function(action, filepath, refresh, entry_type, opts)
+  -- Silent rather than `sync.require_cli`: this fires per file event, so a
+  -- missing yq would be one notification per file the user touches.
   if vim.fn.executable("yq") ~= 1 then return false end
   local r = context.resolve_change(filepath, action, entry_type)
   if not r then return false end
-  local top_level_entry, kustomize_file = r.name, r.kustomize_file
 
   -- Bootstrapping is part of the same yes: the directory is useless as a
   -- resource without a kustomization, so say that rather than adding a broken
   -- entry or asking twice.
   local function apply()
-    if r.needs_bootstrap and not sync.bootstrap(r.path) then return end
-    sync.execute_yq(action, top_level_entry, kustomize_file, opts)
+    sync.apply_changes({ vim.tbl_extend("error", r, { op = action }) }, opts)
   end
 
   local prompt_title
   if r.needs_bootstrap then
-    prompt_title = string.format(" Create kustomization in %s and add it? ", top_level_entry)
+    prompt_title = string.format(" Create kustomization in %s and add it? ", r.name)
   elseif action == "add" then
-    prompt_title = string.format(" Add %s to kustomization? ", top_level_entry)
+    prompt_title = string.format(" Add %s to kustomization? ", r.name)
   else
-    prompt_title = string.format(" Remove %s from kustomization? ", top_level_entry)
+    prompt_title = string.format(" Remove %s from kustomization? ", r.name)
   end
 
   local menu = Menu({

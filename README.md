@@ -4,8 +4,8 @@ Keep a Kustomize `.resources` list in step with the files on disk, from Neo-tree
 
 ## Features
 
-- **Resource syncing:** Diffs the `.resources` list against what's actually in the directory, adding what's missing and dropping what's gone.
-- **Bootstrap on add:** Create a directory in your explorer and you're asked whether to add it. If it has no kustomization file yet, confirming runs `kustomize create` inside it first, so the parent never ends up pointing at a directory that can't be built.
+- **Resource syncing:** Diffs the `.resources` list against what's actually in the directory, adding what's missing and dropping what's gone. In a directory with no kustomization yet, one run creates it and syncs it.
+- **Bootstrap on add:** Create a directory in your explorer and you're asked whether to add it. If it has no kustomization file yet, confirming runs `kustomize create` inside it first, so the parent never ends up pointing at a directory that can't be built. The generated file is normalized to match the formatting of a synced one.
 - **Interactive selector:** A checkbox menu for toggling individual resources in and out.
 - **Auto-prompt on file changes:** Create or delete a file in Neo-tree or Oil and you get asked whether to update `kustomization.yaml`.
 - **Build preview:** Render a kustomization with `kustomize build` into a read-only buffer, nothing written to disk. Horizontal split, vertical split, or float, set by `build.output`.
@@ -92,6 +92,7 @@ The default configuration settings:
 ```lua
 require("kustomize-sync").setup({
   sort_resources = true, -- Alphabetically sort .resources list
+  format_command = nil,  -- e.g. { "yamlfmt" }; runs over kustomization.yaml after each write
   build = {
     output = "split", -- "split" | "vsplit" | "float"
     keymaps = {      -- string, list of strings, or false to leave unmapped
@@ -115,6 +116,28 @@ require("kustomize-sync").setup({
   }
 })
 ```
+
+## Formatting
+
+Left alone, `kustomization.yaml` comes out however `yq` writes it: two-space
+indented list entries, no blank lines. Point `format_command` at your formatter
+and it runs over the file after each write, so your settings win instead:
+
+```lua
+format_command = { "yamlfmt" }        -- or "yamlfmt", or any tool that formats in place
+format_command = { "prettier", "-w" } -- extra flags go in the list
+```
+
+The command is run with the kustomization's directory as the working directory,
+so a project `.yamlfmt` is picked up where one exists and your global config
+applies everywhere else — no per-project setup. Any tool that rewrites the file
+it's given works; the path is appended to the command.
+
+Every file this plugin writes goes through it, including a `kustomization.yaml`
+created for you when you add a directory — both that new file and the parent
+gaining the entry. It runs once per sync rather than once per resource, and a
+missing or failing command is reported without failing the sync. Blank lines are still stripped
+beforehand, since `yq` leaves them behind and formatters tend to preserve them.
 
 ## Integration Wiring
 

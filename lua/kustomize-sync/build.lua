@@ -55,15 +55,10 @@ local function hint()
   return table.concat(parts, "  ")
 end
 
--- Resolve the directory to build: exact kustomization in `dir`, else nearest
--- ancestor that has one. Returns the dir path (not the file), or nil.
-local function resolve_build_dir(ctx)
-  local dir = ctx.is_dir and ctx.path or vim.fn.fnamemodify(ctx.path, ":h")
-  if sync.find_kustomization(dir) then
-    return dir
-  end
-  local _, ancestor_dir = context.find_parent_kustomize(dir)
-  return ancestor_dir
+-- Winbar and statusline treat `%` as the start of an item, so a path
+-- containing one has to be doubled before it goes on screen.
+local function esc(s)
+  return (s:gsub("%%", "%%%%"))
 end
 
 -- Render lines into the output buffer (toggles modifiable around write).
@@ -105,9 +100,19 @@ local function mark_changes(bufnr, baseline, current)
       table.insert(rows, row)
     else
       local hl = count_a == 0 and "DiffAdd" or "DiffChange"
-      table.insert(rows, start_b - 1)
-      for row = start_b - 1, math.min(start_b + count_b - 2, last_row) do
-        vim.api.nvim_buf_set_extmark(bufnr, MARK_NS, row, 0, { line_hl_group = hl })
+      local first = start_b - 1
+      local last = math.min(start_b + count_b - 2, last_row)
+      table.insert(rows, first)
+      -- One extmark spanning the hunk, not one per line: a change that touches
+      -- every manifest (an image tag, a common label) is otherwise an API call
+      -- per line of a build that runs to thousands.
+      if first <= last then
+        vim.api.nvim_buf_set_extmark(bufnr, MARK_NS, first, 0, {
+          end_row = last + 1,
+          end_col = 0,
+          hl_group = hl,
+          hl_eol = true,
+        })
       end
     end
   end
@@ -133,8 +138,8 @@ local function set_status(win, label, status)
     end)
   elseif win.winid and vim.api.nvim_win_is_valid(win.winid) then
     vim.wo[win.winid].winbar = table.concat({
-      "kustomize build: " .. label:gsub("%%", "%%%%"),
-      status:gsub("%%", "%%%%"),
+      "kustomize build: " .. esc(label),
+      esc(status),
       hint(),
     }, "   ")
   end
@@ -150,10 +155,7 @@ end
 
 -- Run `kustomize build <target_dir>` asynchronously. on_ok receives stdout.
 local function run_build(target_dir, on_ok)
-  if vim.fn.executable("kustomize") ~= 1 then
-    vim.notify("kustomize CLI not found", vim.log.levels.ERROR)
-    return
-  end
+  if not sync.require_cli("kustomize") then return end
 
   vim.system(
     { "kustomize", "build", target_dir },
@@ -170,9 +172,12 @@ local function run_build(target_dir, on_ok)
   )
 end
 
--- Create the output window for the configured mode. `label` is shown in the
--- float border title / split winbar. Returns an unmounted nui component
--- (NuiSplit or NuiPopup) exposing `.bufnr`, `:map`, `:unmount`.
+local OUTPUT_BUF_OPTIONS = { buftype = "nofile", swapfile = false, filetype = "yaml" }
+
+-- Create the output window for the configured mode. `label` names the build in
+-- the float's border title; the drift indicator and hint line are left to
+-- `set_status`, which runs before the window is ever drawn. Returns an unmounted
+-- nui component (NuiSplit or NuiPopup) exposing `.bufnr`, `:map`, `:unmount`.
 local function make_output_window(label)
   local mode = config.options.build.output
 
@@ -187,12 +192,10 @@ local function make_output_window(label)
         text = {
           top = NuiText(" kustomize build: " .. label .. " ", "Normal"),
           top_align = "center",
-          bottom = NuiText(" " .. hint() .. " ", "Comment"),
-          bottom_align = "center",
         },
       },
       win_options = { winhighlight = "Normal:Normal,FloatBorder:Normal" },
-      buf_options = { buftype = "nofile", swapfile = false, filetype = "yaml" },
+      buf_options = OUTPUT_BUF_OPTIONS,
     })
   end
 
@@ -207,10 +210,7 @@ local function make_output_window(label)
     relative = "editor",
     position = position,
     size = "40%",
-    win_options = {
-      winbar = "kustomize build: " .. label:gsub("%%", "%%%%") .. "   " .. hint(),
-    },
-    buf_options = { buftype = "nofile", swapfile = false, filetype = "yaml" },
+    buf_options = OUTPUT_BUF_OPTIONS,
   })
 end
 
@@ -228,11 +228,10 @@ local function make_diff_buf(side, content)
   diff_seq = diff_seq + 1
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(buf, string.format("kustomize-diff://%s/%d", side, diff_seq))
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].filetype = "yaml"
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(content, "\n", { plain = true }))
-  vim.bo[buf].modifiable = false
+  for option, value in pairs(OUTPUT_BUF_OPTIONS) do
+    vim.bo[buf][option] = value
+  end
+  set_buffer_lines(buf, content)
   return buf
 end
 
@@ -245,14 +244,14 @@ local function open_diff(old, old_label, new, new_label)
 
   local left = make_diff_buf("baseline", old)
   vim.api.nvim_win_set_buf(0, left)
-  vim.wo.winbar = old_label:gsub("%%", "%%%%")
+  vim.wo.winbar = esc(old_label)
   vim.cmd("diffthis")
   pin_buffer(vim.api.nvim_get_current_win())
 
   vim.cmd("rightbelow vsplit")
   local right = make_diff_buf("current", new)
   vim.api.nvim_win_set_buf(0, right)
-  vim.wo.winbar = new_label:gsub("%%", "%%%%")
+  vim.wo.winbar = esc(new_label)
   vim.cmd("diffthis")
   pin_buffer(vim.api.nvim_get_current_win())
 
@@ -268,31 +267,35 @@ local function open_diff(old, old_label, new, new_label)
   end
 end
 
+-- A relative=editor split created while a floating window is current (e.g. a
+-- floating neo-tree/oil) collapses the layout to a single full-screen window,
+-- so split/vsplit output moves to a normal window first. Float output (Popup)
+-- is editor-relative regardless, and switching away would move focus off the
+-- invoking float, so it stays put.
+local function anchor_to_normal_window()
+  if config.options.build.output == "float" then return end
+  if vim.api.nvim_win_get_config(0).relative == "" then return end
+
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_config(w).relative == "" then
+      vim.api.nvim_set_current_win(w)
+      return
+    end
+  end
+end
+
 M.build = function(ctx, opts)
-  local target_dir = resolve_build_dir(ctx)
-  if not target_dir then
+  -- Build the nearest kustomization at or above the ctx path.
+  local kfile, target_dir = context.find_parent_kustomize(sync.ctx_dir(ctx))
+  if not kfile or not target_dir then
     vim.notify("No kustomization.yaml found", vim.log.levels.WARN)
     return
   end
 
-  local kfile = sync.find_kustomization(target_dir)
-  local label = kfile and vim.fn.fnamemodify(kfile, ":~:.") or target_dir
+  local label = vim.fn.fnamemodify(kfile, ":~:.")
 
   run_build(target_dir, function(stdout)
-    -- A relative=editor split created while a floating window is current (e.g.
-    -- a floating neo-tree/oil) collapses the layout to a single full-screen
-    -- window. For split/vsplit, anchor to a normal window first. Float output
-    -- (Popup) is editor-relative regardless, and switching away would move
-    -- focus off the invoking float, so skip it there.
-    if config.options.build.output ~= "float"
-        and vim.api.nvim_win_get_config(0).relative ~= "" then
-      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.api.nvim_win_get_config(w).relative == "" then
-          vim.api.nvim_set_current_win(w)
-          break
-        end
-      end
-    end
+    anchor_to_normal_window()
 
     local win = make_output_window(label)
     win:mount()
