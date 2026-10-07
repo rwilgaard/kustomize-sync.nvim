@@ -2,6 +2,19 @@ local M = {}
 
 M.defaults = {
   sort_resources = true,
+  build = {
+    output = "split", -- "split" | "vsplit" | "float"
+    -- Build-window keymaps. Each is a string, a list of strings to bind
+    -- several keys, or false to leave the action unmapped.
+    keymaps = {
+      rebuild      = "R",
+      next_change  = "]c",
+      prev_change  = "[c",
+      diff         = "d",
+      set_baseline = "D",
+      close        = "q",
+    },
+  },
   integrations = {
     neo_tree = {
       enabled = true,

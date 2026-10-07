@@ -7,8 +7,9 @@ CONTENTS                                                *kustomize-sync-contents
   2. Requirements ............ |kustomize-sync-requirements|
   3. Setup ................... |kustomize-sync-setup|
   4. Commands ................ |kustomize-sync-commands|
-  5. Integrations ............ |kustomize-sync-integrations|
-  6. Healthcheck ............. |kustomize-sync-health|
+  5. Build window ............ |kustomize-sync-build|
+  6. Integrations ............ |kustomize-sync-integrations|
+  7. Healthcheck ............. |kustomize-sync-health|
 
 ==============================================================================
 1. INTRODUCTION                                     *kustomize-sync-introduction*
@@ -17,13 +18,32 @@ kustomize-sync.nvim keeps a `kustomization.yaml` (or `.yml`) `.resources`
 list in sync with the files and directories on disk, driven from Neo-tree,
 Oil.nvim, or the active buffer.
 
+A directory is only useful as a resource once it contains a kustomization file
+of its own, since `kustomize build` fails on one that doesn't. Creating a
+directory in the explorer therefore asks:
+
+    Create kustomization in <name> and add it?
+
+Confirming runs `kustomize create --autodetect` in the directory, then adds it
+to the parent. The generated file gets an explicit empty `.resources`, because
+`kustomize build` rejects a kustomization with no content at all.
+
+A full `:KustomizeSync` never bootstraps on its own: it skips directories with
+no kustomization file rather than creating one unasked. That skip is add-only,
+so a directory already listed stays listed even when it currently has no
+kustomization file, and an entry isn't removed while you're still creating it.
+
+Remote resources (`scheme://`, `git@`, `git::`) don't exist on disk and are
+never removed. Entries commented out with `# - name` are left alone, so you
+can disable a resource without it being added back on the next sync.
+
 ==============================================================================
 2. REQUIREMENTS                                     *kustomize-sync-requirements*
 
 - Neovim >= 0.11.0
 - nui.nvim (https://github.com/MunifTanjim/nui.nvim)
 - yq v4 (https://github.com/mikefarah/yq)
-- kustomize (optional; only to bootstrap a new kustomization via
+- kustomize (for `:KustomizeBuild`, and to bootstrap a new kustomization via
   `kustomize create`)
 
 ==============================================================================
@@ -32,6 +52,17 @@ Oil.nvim, or the active buffer.
 Call `setup()` once. Defaults: >lua
     require("kustomize-sync").setup({
       sort_resources = true,
+      build = {
+        output = "split",
+        keymaps = {
+          rebuild      = "R",
+          next_change  = "]c",
+          prev_change  = "[c",
+          diff         = "d",
+          set_baseline = "D",
+          close        = "q",
+        },
+      },
       integrations = {
         neo_tree = { enabled = true, auto_prompt_on_change = true },
         oil      = { enabled = true, auto_prompt_on_change = true },
@@ -41,6 +72,12 @@ Call `setup()` once. Defaults: >lua
 `sort_resources`         Alphabetically sort `.resources` on add.
 `auto_prompt_on_change`  Prompt to add/remove when files are created or
                          deleted in the explorer.
+`build.output`           Where `:KustomizeBuild` renders: "split" (bottom,
+                         default), "vsplit" (right), or "float" (centered).
+`build.keymaps`          Build window mappings, see |kustomize-sync-build|.
+                         Each action takes a string, a list of strings, or
+                         `false` to leave it unmapped. Actions you don't
+                         name keep their defaults.
 
 ==============================================================================
 4. COMMANDS                                             *kustomize-sync-commands*
@@ -54,8 +91,59 @@ Call `setup()` once. Defaults: >lua
                          Open a checkbox menu to toggle resources in the
                          active buffer's directory.
 
+                                                               *:KustomizeBuild*
+:KustomizeBuild          Render the kustomization for the active buffer's
+                         directory (or the nearest parent that has one) with
+                         `kustomize build` into a read-only buffer.
+                         Runs asynchronously; on failure the error is shown
+                         via a notification and no buffer is opened. The
+                         window type is set by `build.output`, and the title
+                         shows the path of the kustomization that was built.
+
+:KustomizeBuild!         Same, but discard the stored baseline first, so this
+                         render becomes the new one.
+
 ==============================================================================
-5. INTEGRATIONS                                     *kustomize-sync-integrations*
+5. BUILD WINDOW                                            *kustomize-sync-build*
+
+The first render of a directory is kept as its baseline. Rebuild after editing
+your manifests and the two are compared, which answers what a patch actually
+changed in the rendered output, or whether a refactor changed anything at all.
+
+Baselines are stored per directory and last for the Neovim session. Closing
+the build window does not discard one. That is what makes `float` output
+workable: the window covers the screen, so editing means closing it first, and
+the baseline is still there when you build again.
+
+Default mappings, all configurable via `build.keymaps`:
+
+  R       rebuild, reporting how far the output has moved
+  ]c      jump to the next changed region (wraps)
+  [c      jump to the previous changed region (wraps)
+  d       diff the render against the baseline, side by side in a new tab
+  D       set the baseline to what is on screen
+  q       close the build window, and the diff tab, which reuses this key
+
+Changed lines are highlighted in the render itself, using |hl-DiffAdd| and
+|hl-DiffChange|; a removed block is marked with virtual text on the line it
+used to follow. The window also carries a running count, reading either
+`± 3 hunks since baseline 14:02:11` or `= baseline 14:02:11`. It sits in the
+|winbar| for "split" and "vsplit", and in the bottom border for "float".
+
+All of these are buffer-local. They apply inside the build window only and
+leave global mappings alone.
+
+`]c` and `[c` follow the gitsigns convention for hunk navigation. The build
+output is not a diff window, so these are ordinary buffer-local mappings, not
+the builtin motions of |diff-mode|. The diff tab opened by `d` is a real diff,
+where the builtins apply as usual.
+
+The build window and both diff windows set |'winfixbuf'|, so the render cannot
+be replaced by `:edit`, `:bnext`, or a file picker; those fail with |E1513|.
+Closing the window clears it.
+
+==============================================================================
+6. INTEGRATIONS                                     *kustomize-sync-integrations*
 
 Neo-tree and Oil are wired via `get_ctx()` helpers you bind to keymaps. See
 the README for full command/keymap examples.
@@ -68,8 +156,10 @@ Oil: >lua
     local ctx = require("kustomize-sync.integrations.oil").get_ctx()
     if ctx then require("kustomize-sync").sync(ctx) end
 <
+The same `ctx` works for `interactive_sync()` and `build()`.
+
 ==============================================================================
-6. HEALTHCHECK                                           *kustomize-sync-health*
+7. HEALTHCHECK                                           *kustomize-sync-health*
 
 Verify external CLI dependencies: >
     :checkhealth kustomize-sync

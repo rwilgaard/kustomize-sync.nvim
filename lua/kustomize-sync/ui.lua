@@ -36,11 +36,16 @@ M.interactive_sync = function(ctx, opts)
       while true do
         local name, type = vim.uv.fs_scandir_next(handle)
         if not name then break end
-        if not sync.is_kustomization(name) and (type == "directory" or sync.is_yaml(name))
-            and not commented[name] then
+        if sync.is_resource_entry(name, type) and not commented[name] then
           local clean_name = name:gsub("/$", "")
-          table.insert(raw_items, { name = clean_name, is_active = res_map[clean_name] == true })
-          if #clean_name > max_len then max_len = #clean_name end
+          local is_active = res_map[clean_name] == true
+          -- Entries that can't be added (a directory with no kustomization
+          -- file) are hidden unless they're already listed, in which case the
+          -- user still needs a way to toggle them off.
+          if is_active or sync.is_addable_entry(dir, name, type) then
+            table.insert(raw_items, { name = clean_name, is_active = is_active })
+            if #clean_name > max_len then max_len = #clean_name end
+          end
         end
       end
     end
@@ -127,7 +132,13 @@ M.batch_handle_changes = function(changes, refresh, opts)
       local key = change.op .. "\0" .. r.name .. "\0" .. r.kustomize_file
       if not seen[key] then
         seen[key] = true
-        table.insert(items, { op = change.op, name = r.name, kustomize_file = r.kustomize_file })
+        table.insert(items, {
+          op              = change.op,
+          name            = r.name,
+          path            = r.path,
+          kustomize_file  = r.kustomize_file,
+          needs_bootstrap = r.needs_bootstrap,
+        })
       end
     end
   end
@@ -139,18 +150,21 @@ M.batch_handle_changes = function(changes, refresh, opts)
   local selected = {}
   for i = 1, #items do selected[i] = true end
 
+  local function item_label(item)
+    local label = item.op == "add" and "+ " .. item.name or "- " .. item.name
+    -- Say so up front: confirming this one writes a kustomization to disk.
+    if item.needs_bootstrap then label = label .. " (create kustomization)" end
+    return label
+  end
+
   local title   = " Update kustomization.yaml "
   local hint    = " <Space> toggle  <CR> apply  q cancel "
   local max_len = math.max(#title, #hint)
   for _, item in ipairs(items) do
-    local len = 4 + 2 + #item.name
+    local len = 4 + #item_label(item)
     if len > max_len then max_len = len end
   end
   local width = max_len + 2
-
-  local function item_label(item)
-    return item.op == "add" and "+ " .. item.name or "- " .. item.name
-  end
 
   local function make_lines()
     local lines = {}
@@ -215,7 +229,11 @@ M.batch_handle_changes = function(changes, refresh, opts)
 
   local function confirm()
     for i, item in ipairs(items) do
-      if selected[i] then sync.execute_yq(item.op, item.name, item.kustomize_file, opts) end
+      if selected[i] then
+        if not item.needs_bootstrap or sync.bootstrap(item.path) then
+          sync.execute_yq(item.op, item.name, item.kustomize_file, opts)
+        end
+      end
     end
     m:unmount()
   end
@@ -232,9 +250,22 @@ M.handle_change = function(action, filepath, refresh, entry_type, opts)
   if not r then return false end
   local top_level_entry, kustomize_file = r.name, r.kustomize_file
 
-  local prompt_title = action == "add" and
-      string.format(" Add %s to kustomization? ", top_level_entry) or
-      string.format(" Remove %s from kustomization? ", top_level_entry)
+  -- Bootstrapping is part of the same yes: the directory is useless as a
+  -- resource without a kustomization, so say that rather than adding a broken
+  -- entry or asking twice.
+  local function apply()
+    if r.needs_bootstrap and not sync.bootstrap(r.path) then return end
+    sync.execute_yq(action, top_level_entry, kustomize_file, opts)
+  end
+
+  local prompt_title
+  if r.needs_bootstrap then
+    prompt_title = string.format(" Create kustomization in %s and add it? ", top_level_entry)
+  elseif action == "add" then
+    prompt_title = string.format(" Add %s to kustomization? ", top_level_entry)
+  else
+    prompt_title = string.format(" Remove %s from kustomization? ", top_level_entry)
+  end
 
   local menu = Menu({
     relative = "cursor",
@@ -257,13 +288,13 @@ M.handle_change = function(action, filepath, refresh, entry_type, opts)
       submit = { "<CR>", "<Space>" },
     },
     on_submit = function(item)
-      if item.id == "yes" then sync.execute_yq(action, top_level_entry, kustomize_file, opts) end
+      if item.id == "yes" then apply() end
     end,
   })
 
   menu:map("n", "y", function()
     menu:unmount()
-    sync.execute_yq(action, top_level_entry, kustomize_file, opts)
+    apply()
   end, { nowait = true })
 
   menu:map("n", "n", function() menu:unmount() end, { nowait = true })

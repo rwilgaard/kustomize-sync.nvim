@@ -32,3 +32,11 @@ vim.api.nvim_create_user_command("KustomizeInteractiveSync", function()
     require("kustomize-sync").interactive_sync(ctx)
   end
 end, {})
+
+-- Bang discards the stored baseline, so the render becomes the new one.
+vim.api.nvim_create_user_command("KustomizeBuild", function(args)
+  local ctx = get_current_buf_ctx()
+  if ctx then
+    require("kustomize-sync").build(ctx, { reset_baseline = args.bang })
+  end
+end, { bang = true })
