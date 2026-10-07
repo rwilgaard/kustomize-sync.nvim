@@ -7,6 +7,12 @@ M.defaults = {
   -- output alone. The tool resolves its own config, so a global one works
   -- without per-project setup.
   format_command = nil,
+  -- How a file in a new subdirectory is listed when nothing about that
+  -- directory says: "kustomization" gives the directory its own kustomization
+  -- and lists it whole, "path" lists the file by its path. "auto" follows what
+  -- the kustomization already does and falls back to "kustomization". The
+  -- prompt offers the other form either way.
+  nested = "auto",
   build = {
     output = "split", -- "split" | "vsplit" | "float"
     -- Build-window keymaps. Each is a string, a list of strings to bind

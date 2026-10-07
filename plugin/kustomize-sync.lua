@@ -10,6 +10,9 @@ local function get_current_buf_ctx()
     vim.notify("No active file or buffer", vim.log.levels.WARN)
     return nil
   end
+  -- An Oil buffer is named after the directory it shows, behind a scheme and
+  -- with a trailing slash.
+  path = path:gsub("^oil://", ""):gsub("(.)/+$", "%1")
   return {
     path = path,
     is_dir = vim.fn.isdirectory(path) == 1,

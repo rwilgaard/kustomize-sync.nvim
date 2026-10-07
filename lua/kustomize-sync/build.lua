@@ -63,7 +63,7 @@ end
 
 -- Render lines into the output buffer (toggles modifiable around write).
 local function set_buffer_lines(bufnr, stdout)
-  if not vim.api.nvim_buf_is_valid(bufnr) then return end
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(stdout, "\n", { plain = true }))
   vim.bo[bufnr].modifiable = false
@@ -73,7 +73,7 @@ end
 -- baseline, so drift is visible without opening the diff tab. Returns the rows
 -- (0-indexed) each hunk starts on, for `]c` / `[c`.
 local function mark_changes(bufnr, baseline, current)
-  if not vim.api.nvim_buf_is_valid(bufnr) then return {} end
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return {} end
   vim.api.nvim_buf_clear_namespace(bufnr, MARK_NS, 0, -1)
   if baseline == current then return {} end
 
@@ -231,6 +231,9 @@ local function make_diff_buf(side, content)
   for option, value in pairs(OUTPUT_BUF_OPTIONS) do
     vim.bo[buf][option] = value
   end
+  -- Each diff makes a fresh pair holding a full render; without this they
+  -- stay loaded after the tab closes.
+  vim.bo[buf].bufhidden = "wipe"
   set_buffer_lines(buf, content)
   return buf
 end
@@ -242,18 +245,18 @@ local function open_diff(old, old_label, new, new_label)
   vim.cmd("tabnew")
   local placeholder = vim.api.nvim_get_current_buf()
 
-  local left = make_diff_buf("baseline", old)
-  vim.api.nvim_win_set_buf(0, left)
-  vim.wo.winbar = esc(old_label)
-  vim.cmd("diffthis")
-  pin_buffer(vim.api.nvim_get_current_win())
+  local function show(side, content, label)
+    local buf = make_diff_buf(side, content)
+    vim.api.nvim_win_set_buf(0, buf)
+    vim.wo.winbar = esc(label)
+    vim.cmd("diffthis")
+    pin_buffer(vim.api.nvim_get_current_win())
+    return buf
+  end
 
+  local left = show("baseline", old, old_label)
   vim.cmd("rightbelow vsplit")
-  local right = make_diff_buf("current", new)
-  vim.api.nvim_win_set_buf(0, right)
-  vim.wo.winbar = esc(new_label)
-  vim.cmd("diffthis")
-  pin_buffer(vim.api.nvim_get_current_win())
+  local right = show("current", new, new_label)
 
   pcall(vim.api.nvim_buf_delete, placeholder, { force = true })
 
@@ -305,42 +308,59 @@ M.build = function(ctx, opts)
 
     -- Snapshot the render so later builds can be diffed against it: edit the
     -- manifests, build again, and see what actually moved in the output.
-    if opts and opts.reset_baseline then baselines[target_dir] = nil end
-    local base = baselines[target_dir]
-    if not base then
-      base = { output = stdout, at = os.date("%H:%M:%S") }
-      baselines[target_dir] = base
+    --
+    -- Read from the module table each time rather than held in a local: two
+    -- windows on one directory share the baseline, and a copy captured when
+    -- this one opened would go on diffing against it after the other moved it.
+    local function base() return baselines[target_dir] end
+    local function set_baseline(output)
+      baselines[target_dir] = { output = output, at = os.date("%H:%M:%S") }
     end
+    if opts and opts.reset_baseline then baselines[target_dir] = nil end
+    if not base() then set_baseline(stdout) end
     local current = stdout
     local hunk_rows = {}
+    local painted
 
     -- Paint drift into the buffer and the status indicator. Called on open, on
     -- every rebuild, and after re-baselining, so what's on screen always says
     -- how far it has moved from the baseline.
     local function refresh_drift()
-      hunk_rows = mark_changes(win.bufnr, base.output, current)
-      set_status(win, label, status_text(#hunk_rows, base.at))
+      painted = base()
+      hunk_rows = mark_changes(win.bufnr, painted.output, current)
+      set_status(win, label, status_text(#hunk_rows, painted.at))
     end
     refresh_drift()
+
+    -- Repaint first if the baseline moved under this window, so a jump or a
+    -- diff never works from marks drawn against the old one.
+    local function catch_up()
+      if painted ~= base() then refresh_drift() end
+    end
 
     map_action(win, "close", function() win:unmount() end)
 
     map_action(win, "rebuild", function()
       vim.notify("Rebuilding " .. label .. "…", vim.log.levels.INFO)
       run_build(target_dir, function(new_stdout)
+        -- Closed while the build ran: nui has dropped the buffer, and there is
+        -- nothing left to repaint.
+        if not win.bufnr then return end
         current = new_stdout
         set_buffer_lines(win.bufnr, current)
         refresh_drift()
-        vim.notify("Rebuilt " .. label .. " — " .. status_text(#hunk_rows, base.at), vim.log.levels.INFO)
+        vim.notify("Rebuilt " .. label .. " — " .. status_text(#hunk_rows, base().at), vim.log.levels.INFO)
       end)
     end)
 
+    local function notify_unchanged()
+      vim.notify("No change since baseline (" .. base().at .. ")", vim.log.levels.INFO)
+    end
+
     -- Jump between changed regions the way `]c` / `[c` work in a real diff.
     local function jump(forward)
-      if #hunk_rows == 0 then
-        vim.notify("No change since baseline (" .. base.at .. ")", vim.log.levels.INFO)
-        return
-      end
+      catch_up()
+      if #hunk_rows == 0 then return notify_unchanged() end
       local row = vim.api.nvim_win_get_cursor(win.winid)[1] - 1
       local target
       if forward then
@@ -361,21 +381,18 @@ M.build = function(ctx, opts)
     map_action(win, "prev_change", function() jump(false) end)
 
     map_action(win, "diff", function()
-      if current == base.output then
-        vim.notify("No change since baseline (" .. base.at .. ")", vim.log.levels.INFO)
-        return
-      end
+      catch_up()
+      if current == base().output then return notify_unchanged() end
       open_diff(
-        base.output, "baseline " .. base.at .. ": " .. label,
+        base().output, "baseline " .. base().at .. ": " .. label,
         current, "current: " .. label
       )
     end)
 
     map_action(win, "set_baseline", function()
-      base = { output = current, at = os.date("%H:%M:%S") }
-      baselines[target_dir] = base
+      set_baseline(current)
       refresh_drift()
-      vim.notify("Baseline set to current build (" .. base.at .. ")", vim.log.levels.INFO)
+      vim.notify("Baseline set to current build (" .. base().at .. ")", vim.log.levels.INFO)
     end)
   end)
 end

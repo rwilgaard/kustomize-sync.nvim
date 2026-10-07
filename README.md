@@ -4,10 +4,12 @@ Keep a Kustomize `.resources` list in step with the files on disk, from Neo-tree
 
 ## Features
 
-- **Resource syncing:** Diffs the `.resources` list against what's actually in the directory, adding what's missing and dropping what's gone. In a directory with no kustomization yet, one run creates it and syncs it.
-- **Bootstrap on add:** Create a directory in your explorer and you're asked whether to add it. If it has no kustomization file yet, confirming runs `kustomize create` inside it first, so the parent never ends up pointing at a directory that can't be built. The generated file is normalized to match the formatting of a synced one.
-- **Interactive selector:** A checkbox menu for toggling individual resources in and out.
-- **Auto-prompt on file changes:** Create or delete a file in Neo-tree or Oil and you get asked whether to update `kustomization.yaml`.
+- **Resource syncing:** Diffs the `.resources` list against what's actually in the directory, adding what's missing and dropping what's gone. In a directory with no kustomization yet, one run creates it and syncs it, then asks whether the kustomization above should list the directory, the same as if you had created the file from an explorer.
+- **Bootstrap on add:** Create a directory in your explorer and you're asked whether to add it. If it has no kustomization file yet, confirming runs `kustomize create` inside it first, so the parent never ends up pointing at a directory that can't be built. Create `apps/new/file.yaml` in one go and both `apps` and `apps/new` get one, each listed in the one above; the prompt says how many it will write. The generated file is normalized to match the formatting of a synced one.
+- **Two ways to list a subdirectory:** A file in a new directory can go in as the directory (which gets its own kustomization) or by its path, `apps/new/file.yaml`. The prompt picks whichever the kustomization already uses and offers the other: `<Tab>` in the checkbox menu, `s` in the yes/no prompt. Set `nested` to pin the default.
+- **Interactive selector:** A checkbox menu for toggling individual resources in and out, including files listed by path. A directory nothing is listed from yet shows as one folded line; open it to pick files out of it.
+- **Auto-prompt on file changes:** Create, delete, or rename a file in Neo-tree or Oil and you get asked whether to update `kustomization.yaml`. A rename is one prompt covering both halves, and a move across directories updates the kustomization at each end. Files listed by path follow along: rename `deploy/` and every `deploy/…` entry is rewritten, delete it and they are all offered for removal.
+- **Knows what isn't a resource:** Patch files, generator inputs, and components are reached through their own keys, so they're never offered as resources.
 - **Build preview:** Render a kustomization with `kustomize build` into a read-only buffer, nothing written to disk. Horizontal split, vertical split, or float, set by `build.output`.
 - **Build diff:** The first render becomes a baseline. Edit, rebuild, and changed lines are highlighted in place with a running hunk count; `]c` / `[c` walk between them and `d` opens a side-by-side diff. Answers whether a patch did what you meant, or whether a refactor changed nothing.
 - **Healthcheck:** `:checkhealth kustomize-sync` checks the external CLIs.
@@ -93,6 +95,7 @@ The default configuration settings:
 require("kustomize-sync").setup({
   sort_resources = true, -- Alphabetically sort .resources list
   format_command = nil,  -- e.g. { "yamlfmt" }; runs over kustomization.yaml after each write
+  nested = "auto",       -- "auto" | "kustomization" | "path"; how a file in a new subdirectory is listed
   build = {
     output = "split", -- "split" | "vsplit" | "float"
     keymaps = {      -- string, list of strings, or false to leave unmapped
@@ -138,6 +141,96 @@ created for you when you add a directory — both that new file and the parent
 gaining the entry. It runs once per sync rather than once per resource, and a
 missing or failing command is reported without failing the sync. Blank lines are still stripped
 beforehand, since `yq` leaves them behind and formatters tend to preserve them.
+
+## Files in a new subdirectory
+
+Create `apps/api/deploy.yaml` under a kustomization that knows nothing about
+`apps` and there are two valid ways to list it:
+
+```yaml
+resources:
+  - apps                  # apps/ and apps/api/ each get a kustomization.yaml
+```
+
+```yaml
+resources:
+  - apps/api/deploy.yaml  # nothing else is written
+```
+
+With `nested = "auto"` the prompt leads with the form the kustomization already
+uses: by path if it lists paths and no whole directories, otherwise the
+directory. `"kustomization"` and `"path"` fix the choice. Either way the other
+form is one key away. In the checkbox menu the line is marked `⇄` and `<Tab>`
+switches it; in the yes/no prompt a third line under `s` offers it.
+
+`:KustomizeSync` follows the same preference without asking. With paths
+preferred it lists the yaml files of a directory that has no kustomization;
+with directories preferred it leaves such a directory alone, since it never
+creates a kustomization in a subdirectory on its own.
+
+This only decides the case nothing else does. A directory that has its own
+kustomization, or that `.resources` already lists files out of, keeps the form
+it has. And where a form has nothing to offer there is no prompt: a new empty
+directory can't be listed by path, so with paths preferred it is left alone
+until a manifest lands in it.
+
+### Switching a directory that is already listed
+
+The explorer events that change what a directory *is* offer to carry the
+kustomization along.
+
+Create `deploy/kustomization.yaml`, from an explorer or by running
+`:KustomizeSync` in `deploy/`, while `.resources` lists `deploy/a.yaml` and
+`deploy/b.yaml`, and the prompt offers to list `deploy` whole instead. Saying
+yes moves those entries into the new kustomization (as `a.yaml`, `b.yaml`) and
+replaces them with `deploy` in the parent, so the build renders the same
+manifests as before. It is one line in the menu, `~ deploy (replaces 2 listed
+by path)`, because doing half of it would either drop manifests or name them
+twice. An empty file, which is what an explorer creates, is filled in for you;
+one you wrote yourself keeps its contents and gains the missing entries.
+
+Delete `deploy/kustomization.yaml` while `deploy` is listed, and the entry can
+no longer be built. The prompt offers to remove it, and `<Tab>` switches to
+removing it and listing the yaml in there by path. The deleted file took its
+resource list with it, so every yaml is offered; untick the ones that were
+never resources.
+
+## What counts as a resource
+
+A yaml file or a directory in the kustomization's own directory, unless the
+kustomization already reaches it some other way. These are all left alone:
+
+- Files named under `patches`, `patchesStrategicMerge`, `patchesJson6902`,
+  `crds`, `configurations`, `transformers`, `generators`, `replacements`,
+  `openapi`, `helmCharts`, or a `configMapGenerator` / `secretGenerator`
+  (including the `key=path` form).
+- Directories listed under `components` or the older `bases`, and any directory
+  whose kustomization says `kind: Component`. A component belongs under `components`; listing one as
+  a resource makes `kustomize build` fail.
+- Directories with no kustomization file of their own, which can't be built.
+  Creating one is offered when you add the directory from an explorer.
+- Anything whose name starts with a dot. `.gitlab-ci.yml` and `.github/` are
+  yaml, and none of it is a manifest.
+- A file that isn't yaml in a new subdirectory. A README or a script is no
+  reason to offer that directory as a resource.
+- Entries commented out with `# - foo`, so you can disable a resource without it
+  coming back on the next sync.
+- Remote refs (`https://`, `git@`, `git::`, `github.com/org/repo`), which don't
+  exist on disk.
+- Entries that point outside the directory or into a subdirectory, like
+  `../base` or `deploy/svc.yaml`, as long as the path exists. One that no longer
+  exists is removed like any other stale entry, and deleting the file in an
+  explorer asks about it.
+- A directory you already list files out of that way. With `deploy/svc.yaml` in
+  `.resources`, `deploy` itself is never added next to them, since listing both
+  names every file twice. A new file created there from an explorer is offered by its path,
+  like the ones beside it, and `:KustomizeSync` adds any yaml in there that
+  isn't listed yet. It stops at a subdirectory with its own kustomization,
+  which goes in as one entry (`deploy/sub`).
+
+Anything in that list that's *already* in `.resources` stays there. Sync won't
+add it, and won't quietly remove it either — that's yours to fix, and the
+interactive menu will toggle it off.
 
 ## Integration Wiring
 
@@ -208,7 +301,7 @@ require("oil").setup({
 The plugin also exposes standard global commands for active file buffers:
 
 - `:KustomizeSync` - Syncs resources of the directory containing the active buffer.
-- `:KustomizeInteractiveSync` - Opens the interactive menu for the directory containing the active buffer.
+- `:KustomizeInteractiveSync` - Opens the interactive menu for the directory containing the active buffer. `<Space>` or `<CR>` toggles an entry, or opens a folded directory.
 - `:KustomizeBuild` - Renders the kustomization for the active buffer's directory (or nearest parent) into a read-only window.
 - `:KustomizeBuild!` - Same, but discards the stored baseline so this render becomes the new one.
 
