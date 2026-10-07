@@ -15,7 +15,7 @@ local MARK_NS = vim.api.nvim_create_namespace("kustomize_build_diff")
 local diff_fn = vim.text and vim.text.diff or vim.diff
 
 -- Order the hint line lists actions in. Actions grouped together share one
--- label, so `]c`/`[c` read as a single "change" entry.
+-- label, so `<Tab>`/`<S-Tab>` read as a single "change" entry.
 local HINT_SPEC = {
   { actions = { "rebuild" },                    text = "rebuild" },
   { actions = { "next_change", "prev_change" }, text = "change" },
@@ -71,7 +71,7 @@ end
 
 -- Highlight, inside the rendered buffer, every line that differs from the
 -- baseline, so drift is visible without opening the diff tab. Returns the rows
--- (0-indexed) each hunk starts on, for `]c` / `[c`.
+-- (0-indexed) each hunk starts on, for the next/previous change keys.
 local function mark_changes(bufnr, baseline, current)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return {} end
   vim.api.nvim_buf_clear_namespace(bufnr, MARK_NS, 0, -1)
@@ -260,12 +260,22 @@ local function open_diff(old, old_label, new, new_label)
 
   pcall(vim.api.nvim_buf_delete, placeholder, { force = true })
 
-  -- The diff tab reuses whatever closes the build window, so one key closes
-  -- both. `]c` / `[c` are left alone here: these windows are in real diff mode,
-  -- where those are builtin motions already.
+  -- The diff tab reuses the build window's keys, so the same ones close it and
+  -- walk its changes. These windows are in real diff mode, where `]c` / `[c`
+  -- already do the walking; the configured keys are pointed at those. Leaving
+  -- them unmapped is not neutral: a key the user has bound globally to switch
+  -- buffers falls through here and fails on the pinned window with E1513.
+  local motions = { next_change = "]c", prev_change = "[c" }
   for _, buf in ipairs({ left, right }) do
     for _, lhs in ipairs(lhs_list("close")) do
       vim.keymap.set("n", lhs, "<Cmd>tabclose<CR>", { buffer = buf, nowait = true })
+    end
+    for action, motion in pairs(motions) do
+      for _, lhs in ipairs(lhs_list(action)) do
+        if lhs ~= motion then
+          vim.keymap.set("n", lhs, motion, { buffer = buf, nowait = true })
+        end
+      end
     end
   end
 end
@@ -357,7 +367,7 @@ M.build = function(ctx, opts)
       vim.notify("No change since baseline (" .. base().at .. ")", vim.log.levels.INFO)
     end
 
-    -- Jump between changed regions the way `]c` / `[c` work in a real diff.
+    -- Jump between changed regions, wrapping at either end.
     local function jump(forward)
       catch_up()
       if #hunk_rows == 0 then return notify_unchanged() end

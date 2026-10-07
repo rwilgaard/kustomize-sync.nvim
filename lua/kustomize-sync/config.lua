@@ -19,8 +19,8 @@ M.defaults = {
     -- several keys, or false to leave the action unmapped.
     keymaps = {
       rebuild      = "R",
-      next_change  = "]c",
-      prev_change  = "[c",
+      next_change  = "<Tab>",
+      prev_change  = "<S-Tab>",
       diff         = "d",
       set_baseline = "D",
       close        = "q",

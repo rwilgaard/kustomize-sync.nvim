@@ -11,7 +11,7 @@ Keep a Kustomize `.resources` list in step with the files on disk, from Neo-tree
 - **Auto-prompt on file changes:** Create, delete, or rename a file in Neo-tree or Oil and you get asked whether to update `kustomization.yaml`. A rename is one prompt covering both halves, and a move across directories updates the kustomization at each end. Files listed by path follow along: rename `deploy/` and every `deploy/…` entry is rewritten, delete it and they are all offered for removal.
 - **Knows what isn't a resource:** Patch files, generator inputs, and components are reached through their own keys, so they're never offered as resources.
 - **Build preview:** Render a kustomization with `kustomize build` into a read-only buffer, nothing written to disk. Horizontal split, vertical split, or float, set by `build.output`.
-- **Build diff:** The first render becomes a baseline. Edit, rebuild, and changed lines are highlighted in place with a running hunk count; `]c` / `[c` walk between them and `d` opens a side-by-side diff. Answers whether a patch did what you meant, or whether a refactor changed nothing.
+- **Build diff:** The first render becomes a baseline. Edit, rebuild, and changed lines are highlighted in place with a running hunk count; `<Tab>` / `<S-Tab>` walk between them and `d` opens a side-by-side diff. Answers whether a patch did what you meant, or whether a refactor changed nothing.
 - **Healthcheck:** `:checkhealth kustomize-sync` checks the external CLIs.
 - **Lazy CLI checks:** Missing `yq` or `kustomize` is reported when you run something that needs it, not at startup.
 
@@ -100,8 +100,8 @@ require("kustomize-sync").setup({
     output = "split", -- "split" | "vsplit" | "float"
     keymaps = {      -- string, list of strings, or false to leave unmapped
       rebuild      = "R",
-      next_change  = "]c",
-      prev_change  = "[c",
+      next_change  = "<Tab>",
+      prev_change  = "<S-Tab>",
       diff         = "d",
       set_baseline = "D",
       close        = "q",
@@ -310,10 +310,10 @@ The plugin also exposes standard global commands for active file buffers:
 | Action | Default | Effect |
 | --- | --- | --- |
 | `rebuild` | `R` | Rebuild. Reports how far the output has moved from the baseline. |
-| `next_change` / `prev_change` | `]c` / `[c` | Jump to the next / previous changed region (wraps). |
+| `next_change` / `prev_change` | `<Tab>` / `<S-Tab>` | Jump to the next / previous changed region (wraps). |
 | `diff` | `d` | Diff the current render against the baseline, side by side in a new tab. |
 | `set_baseline` | `D` | Set the baseline to what is currently on screen. |
-| `close` | `q` | Close the build window. The diff tab reuses this key. |
+| `close` | `q` | Close the build window. The diff tab reuses this key, and the two change keys. |
 
 Every action takes a string, a list of strings, or `false` to leave it unmapped:
 
@@ -333,10 +333,13 @@ from whatever you bind, and disabled actions drop out of it.
 All of these are buffer-local, so they only apply inside the build window and
 leave your global mappings alone.
 
-`]c` / `[c` follow the gitsigns convention for hunk navigation in a normal
-buffer. The build output isn't a real diff window, so these are ordinary
-buffer-local mappings rather than the builtin diff motions. Inside the diff tab
-the builtins do the same job, untouched.
+`<Tab>` / `<S-Tab>` are one keystroke on any keyboard layout, which bracket
+pairs like `]c` are not. Inside the build window `<Tab>` would otherwise only
+be jumplist-forward, and the window is pinned to its buffer. The build output
+isn't a real diff window, so these are ordinary buffer-local mappings. The diff
+tab is one: the builtin `]c` / `[c` work there, and whatever you set for
+`next_change` / `prev_change` is mapped onto them, so one pair of keys walks
+changes in both places.
 
 The build and diff windows are pinned to their buffers with
 [`winfixbuf`](https://neovim.io/doc/user/options.html#'winfixbuf'), so `:edit`,
