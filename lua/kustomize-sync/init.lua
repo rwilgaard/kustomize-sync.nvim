@@ -19,5 +19,6 @@ M.sync = function(...) return require("kustomize-sync.sync").sync(...) end
 M.interactive_sync = function(...) return require("kustomize-sync.ui").interactive_sync(...) end
 M.batch_handle_changes = function(...) return require("kustomize-sync.ui").batch_handle_changes(...) end
 M.handle_change = function(...) return require("kustomize-sync.ui").handle_change(...) end
+M.build = function(...) return require("kustomize-sync.build").build(...) end
 
 return M
