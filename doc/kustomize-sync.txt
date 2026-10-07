@@ -31,20 +31,97 @@ explicit `.resources`. Both fixes are needed — `kustomize create` writes its
 list flush against the left margin, and `kustomize build` rejects a
 kustomization with no content at all.
 
+Creating several levels at once, say `apps/new/file.yaml`, gives every new
+directory on the way down a kustomization, each listed in the one above it.
+The prompt says how many it will write.
+
+A file in a new subdirectory can be listed the other way too, by its path
+(`apps/new/file.yaml`), which writes no kustomization at all. The prompt
+leads with the form the `nested` option selects and offers the other one:
+the line is marked `⇄` in the checkbox menu, where <Tab> switches it, and
+the yes/no prompt gains a third line under `s`. A directory that already has
+a kustomization, or that `.resources` already lists files out of, keeps the
+form it has. Where a form has nothing to offer there is no prompt: a new
+empty directory can't be listed by path.
+
+`:KustomizeSync` follows the same preference without asking. With paths
+preferred it lists the yaml files of a directory that has no kustomization;
+with directories preferred it leaves such a directory alone.
+
+A directory that is already listed can change form too. Creating
+`deploy/kustomization.yaml` while `.resources` lists files under `deploy/`
+by path offers to list `deploy` whole instead:
+
+    ~ deploy (replaces 2 listed by path)
+
+Confirming moves those entries into the new kustomization, relative to it,
+and replaces them with `deploy` in the parent, so the build renders the same
+manifests. It is a single line because half of it would drop manifests or
+name them twice. An empty file is filled in; one with content keeps it and
+gains the missing entries.
+
+Deleting `deploy/kustomization.yaml` while `deploy` is listed offers to
+remove the entry, and <Tab> switches to removing it and listing the yaml in
+there by path. The deleted file's own list is gone with it, so every yaml is
+offered; untick what was never a resource.
+
 `:KustomizeSync` in a directory that has no kustomization creates one and then
 syncs it in the same run, since `kustomize create --autodetect` only picks up
 yaml files and would otherwise leave out any subdirectory that is itself a
-kustomization.
+kustomization. The kustomization above then gets the prompt it would get if
+you had created the file from an explorer: add the directory, or list it
+whole in place of files it had by path.
 
-What `:KustomizeSync` will not do is create a kustomization in a *subdirectory*
+What `:KustomizeSync` will not do is create a kustomization in a subdirectory
 to make it addable. It skips those rather than writing files you didn't ask
 for; only the explorer prompt offers that. The skip is add-only, so a
 directory already listed stays listed even when it currently has no
 kustomization file, and an entry isn't removed while you're still creating it.
 
-Remote resources (`scheme://`, `git@`, `git::`) don't exist on disk and are
-never removed. Entries commented out with `# - name` are left alone, so you
-can disable a resource without it being added back on the next sync.
+Remote resources (`scheme://`, `git@`, `git::`, `github.com/org/repo`) don't
+exist on disk and are never removed. Names starting with a dot
+(`.gitlab-ci.yml`, `.github/`) are never added, and a file that isn't yaml
+in a new subdirectory doesn't prompt. Entries commented out with `# - name`
+are left alone, so you can disable a resource without it being added back on
+the next sync.
+
+An entry that points outside the directory or into a subdirectory, like
+`../base` or `deploy/svc.yaml`, is kept as long as the path exists. One that
+no longer exists is removed like any other stale entry, and deleting the file
+in an explorer asks about it.
+
+A directory you list files out of that way is never added next to them:
+with `deploy/svc.yaml` in `.resources`, adding `deploy` as well would name
+every file twice. A new file created there from an explorer is offered by
+its path, like the ones beside it, and `:KustomizeSync` adds any yaml in
+there that isn't listed yet. It stops at a subdirectory with its own
+kustomization, which goes in as one entry (`deploy/sub`).
+
+A kustomization reaches files through a dozen keys besides `.resources`, and
+anything it already reaches is not a resource. Files named under `patches`,
+`patchesStrategicMerge`, `patchesJson6902`, `crds`, `configurations`,
+`transformers`, `generators`, `replacements`, `openapi`, `helmCharts`, or a
+`configMapGenerator` / `secretGenerator` (including the `key=path` form) are
+skipped, as are directories under `components` or the older `bases`, and any
+directory whose own kustomization says `kind: Component`. Adding a patch
+file to `.resources` would make `kustomize build` fail on a duplicate
+resource id; a component listed as a resource fails outright.
+
+Such an entry that is already in `.resources` stays put. It is not added and
+not removed either — correcting it is yours to do, and
+`:KustomizeInteractiveSync` will toggle it off.
+
+Renaming or moving a resource in the explorer drops the old name and adds the
+new one, in one prompt. When the move crosses directories the two halves land
+in different kustomizations, and both are updated. A moved entry keeps its
+form: a file stays a file entry at its new path, and no kustomization is
+created along the way.
+
+Entries listed by path follow their files. Renaming `deploy/a.yaml` to
+`deploy/b.yaml` swaps the one entry; renaming `deploy` rewrites every
+`deploy/...` entry, and deleting it offers them all for removal. A rename
+inside a directory that is listed whole, or not listed at all, changes
+nothing `.resources` records, so nothing is asked.
 
 ==============================================================================
 2. REQUIREMENTS                                     *kustomize-sync-requirements*
@@ -62,6 +139,7 @@ Call `setup()` once. Defaults: >lua
     require("kustomize-sync").setup({
       sort_resources = true,
       format_command = nil,
+      nested = "auto",
       build = {
         output = "split",
         keymaps = {
@@ -80,6 +158,14 @@ Call `setup()` once. Defaults: >lua
     })
 <
 `sort_resources`         Alphabetically sort `.resources` on add.
+`nested`                 How a file in a new subdirectory is listed when
+                         nothing about that directory says: "kustomization"
+                         (the directory gets its own and is listed whole),
+                         "path" (the file is listed as `dir/file.yaml`), or
+                         "auto", which uses "path" when the kustomization
+                         lists paths and no whole directories, and
+                         "kustomization" otherwise. The prompt offers the
+                         other form either way.
 `format_command`         External formatter run over `kustomization.yaml`
                          after each write, e.g. `{ "yamlfmt" }`. A string, a
                          list to pass flags, or nil to keep yq's output. The
@@ -94,8 +180,8 @@ Call `setup()` once. Defaults: >lua
                          warns without failing the sync.
                          Blank lines are stripped before it runs, since yq
                          leaves them behind and formatters keep them.
-`auto_prompt_on_change`  Prompt to add/remove when files are created or
-                         deleted in the explorer.
+`auto_prompt_on_change`  Prompt to add/remove when files are created,
+                         deleted, renamed, or moved in the explorer.
 `build.output`           Where `:KustomizeBuild` renders: "split" (bottom,
                          default), "vsplit" (right), or "float" (centered).
 `build.keymaps`          Build window mappings, see |kustomize-sync-build|.
@@ -113,7 +199,11 @@ Call `setup()` once. Defaults: >lua
                                                      *:KustomizeInteractiveSync*
 :KustomizeInteractiveSync
                          Open a checkbox menu to toggle resources in the
-                         active buffer's directory.
+                         active buffer's directory. Files listed by path
+                         appear under their full path. A directory nothing
+                         is listed from yet is one folded line, e.g.
+                         `▸ loose/ (2 yaml)`; <Space> or <CR> on it opens
+                         it, and on an entry toggles it.
 
                                                                *:KustomizeBuild*
 :KustomizeBuild          Render the kustomization for the active buffer's
