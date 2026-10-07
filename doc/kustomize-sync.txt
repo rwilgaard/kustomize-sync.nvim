@@ -144,8 +144,8 @@ Call `setup()` once. Defaults: >lua
         output = "split",
         keymaps = {
           rebuild      = "R",
-          next_change  = "]c",
-          prev_change  = "[c",
+          next_change  = "<Tab>",
+          prev_change  = "<S-Tab>",
           diff         = "d",
           set_baseline = "D",
           close        = "q",
@@ -232,11 +232,12 @@ the baseline is still there when you build again.
 Default mappings, all configurable via `build.keymaps`:
 
   R       rebuild, reporting how far the output has moved
-  ]c      jump to the next changed region (wraps)
-  [c      jump to the previous changed region (wraps)
+  <Tab>   jump to the next changed region (wraps)
+  <S-Tab> jump to the previous changed region (wraps)
   d       diff the render against the baseline, side by side in a new tab
   D       set the baseline to what is on screen
   q       close the build window, and the diff tab, which reuses this key
+          and the two change keys
 
 Changed lines are highlighted in the render itself, using |hl-DiffAdd| and
 |hl-DiffChange|; a removed block is marked with virtual text on the line it
@@ -247,10 +248,13 @@ used to follow. The window also carries a running count, reading either
 All of these are buffer-local. They apply inside the build window only and
 leave global mappings alone.
 
-`]c` and `[c` follow the gitsigns convention for hunk navigation. The build
-output is not a diff window, so these are ordinary buffer-local mappings, not
-the builtin motions of |diff-mode|. The diff tab opened by `d` is a real diff,
-where the builtins apply as usual.
+<Tab> and <S-Tab> are one keystroke on any keyboard layout, which bracket
+pairs like `]c` are not. In the build window <Tab> would otherwise only be
+jumplist-forward, and the window is pinned to its buffer. The build output
+is not a diff window, so these are ordinary buffer-local mappings. The diff
+tab opened by `d` is a real diff, where the builtin `]c` and `[c` of
+|diff-mode| apply as usual, and the keys set for `next_change` and
+`prev_change` are mapped onto them.
 
 The build window and both diff windows set |'winfixbuf'|, so the render cannot
 be replaced by `:edit`, `:bnext`, or a file picker; those fail with |E1513|.
