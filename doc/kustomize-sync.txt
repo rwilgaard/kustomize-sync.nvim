@@ -25,12 +25,21 @@ directory in the explorer therefore asks:
     Create kustomization in <name> and add it?
 
 Confirming runs `kustomize create --autodetect` in the directory, then adds it
-to the parent. The generated file gets an explicit empty `.resources`, because
-`kustomize build` rejects a kustomization with no content at all.
+to the parent. The generated file is normalized to match what syncing
+produces: indented list entries, sorted when `sort_resources` is set, and an
+explicit `.resources`. Both fixes are needed — `kustomize create` writes its
+list flush against the left margin, and `kustomize build` rejects a
+kustomization with no content at all.
 
-A full `:KustomizeSync` never bootstraps on its own: it skips directories with
-no kustomization file rather than creating one unasked. That skip is add-only,
-so a directory already listed stays listed even when it currently has no
+`:KustomizeSync` in a directory that has no kustomization creates one and then
+syncs it in the same run, since `kustomize create --autodetect` only picks up
+yaml files and would otherwise leave out any subdirectory that is itself a
+kustomization.
+
+What `:KustomizeSync` will not do is create a kustomization in a *subdirectory*
+to make it addable. It skips those rather than writing files you didn't ask
+for; only the explorer prompt offers that. The skip is add-only, so a
+directory already listed stays listed even when it currently has no
 kustomization file, and an entry isn't removed while you're still creating it.
 
 Remote resources (`scheme://`, `git@`, `git::`) don't exist on disk and are
@@ -52,6 +61,7 @@ can disable a resource without it being added back on the next sync.
 Call `setup()` once. Defaults: >lua
     require("kustomize-sync").setup({
       sort_resources = true,
+      format_command = nil,
       build = {
         output = "split",
         keymaps = {
@@ -70,6 +80,20 @@ Call `setup()` once. Defaults: >lua
     })
 <
 `sort_resources`         Alphabetically sort `.resources` on add.
+`format_command`         External formatter run over `kustomization.yaml`
+                         after each write, e.g. `{ "yamlfmt" }`. A string, a
+                         list to pass flags, or nil to keep yq's output. The
+                         file path is appended to the command, which runs with
+                         the kustomization's directory as its working
+                         directory, so a project config is found where one
+                         exists and a global config applies elsewhere. Every
+                         file written goes through it, including a
+                         kustomization created for you when adding a directory
+                         and the parent gaining the entry. Runs once per sync,
+                         not once per resource; a missing or failing command
+                         warns without failing the sync.
+                         Blank lines are stripped before it runs, since yq
+                         leaves them behind and formatters keep them.
 `auto_prompt_on_change`  Prompt to add/remove when files are created or
                          deleted in the explorer.
 `build.output`           Where `:KustomizeBuild` renders: "split" (bottom,
