@@ -30,6 +30,15 @@ M.get_ctx = function()
   }
 end
 
+-- The three commands, run on the entry under the cursor. Ready to use as an
+-- oil keymap callback, so a user's config doesn't have to know what a ctx is.
+for _, action in ipairs({ "sync", "interactive_sync", "build" }) do
+  M[action] = function()
+    local ctx = M.get_ctx()
+    if ctx then ks[action](ctx) end
+  end
+end
+
 function M.setup()
   local oil_config = config.options.integrations.oil
 

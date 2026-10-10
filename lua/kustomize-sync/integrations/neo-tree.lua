@@ -14,6 +14,14 @@ M.get_ctx = function(state)
   }
 end
 
+-- The three commands, run on the node under the cursor. Neo-tree calls a
+-- function mapping with its state, so these can be bound to a key as they are.
+for _, action in ipairs({ "sync", "interactive_sync", "build" }) do
+  M[action] = function(state)
+    ks[action](M.get_ctx(state))
+  end
+end
+
 local registered = false
 
 function M.setup()
