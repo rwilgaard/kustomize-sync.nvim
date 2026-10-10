@@ -260,21 +260,44 @@ The build window and both diff windows set |'winfixbuf'|, so the render cannot
 be replaced by `:edit`, `:bnext`, or a file picker; those fail with |E1513|.
 Closing the window clears it.
 
+A typical round trip, most useful with "float" output: >
+    :KustomizeBuild   baseline captured
+    q                 edit your manifests
+    :KustomizeBuild   "± 2 hunks since baseline 14:02:11"
+    d                 side-by-side diff
+<
+In "split" and "vsplit" press `R` instead of reopening. Once a change is
+what you wanted, `D` (or `:KustomizeBuild!`) moves the baseline forward so
+the next one measures from there.
+
 ==============================================================================
 6. INTEGRATIONS                                     *kustomize-sync-integrations*
 
-Neo-tree and Oil are wired via `get_ctx()` helpers you bind to keymaps. See
-the README for full command/keymap examples.
+With Neo-tree or Oil installed the prompts need no setup. To run the
+commands on whatever is under the cursor in the explorer, bind them to keys.
+Each integration module has `sync`, `interactive_sync` and `build`.
 
-Neo-tree: >lua
-    local ctx = require("kustomize-sync.integrations.neo-tree").get_ctx(state)
-    require("kustomize-sync").sync(ctx)
+Neo-tree, as function mappings: >lua
+    local ks = require("kustomize-sync.integrations.neo-tree")
+    require("neo-tree").setup({
+      window = { mappings = { ["K"] = ks.sync, ["B"] = ks.build } },
+    })
 <
-Oil: >lua
+Oil, as keymap callbacks: >lua
+    local ks = require("kustomize-sync.integrations.oil")
+    require("oil").setup({
+      keymaps = { ["K"] = { callback = ks.sync, desc = "Sync" } },
+    })
+<
+The plugin has to be loadable when that `require` runs; if your explorer is
+configured first, wrap the call in a function.
+
+For anything custom, `get_ctx()` in the same modules returns the table the
+public functions take, `{ path, is_dir, refresh }`, for the entry under the
+cursor: >lua
     local ctx = require("kustomize-sync.integrations.oil").get_ctx()
     if ctx then require("kustomize-sync").sync(ctx) end
 <
-The same `ctx` works for `interactive_sync()` and `build()`.
 
 ==============================================================================
 7. HEALTHCHECK                                           *kustomize-sync-health*
