@@ -64,7 +64,7 @@ Open any file next to a `kustomization.yaml` and run:
 | Command | What it does |
 | --- | --- |
 | `:KustomizeSync` | Sync the list with the directory. Creates the kustomization if there isn't one. |
-| `:KustomizeInteractiveSync` | Checkbox menu. `<Space>` toggles an entry or opens a folded directory. |
+| `:KustomizeInteractiveSync` | Checkbox menu. `<Space>` toggles an entry or opens a folded directory. Each toggle is written straight away. |
 | `:KustomizeBuild` | Preview `kustomize build` for the nearest kustomization. |
 | `:KustomizeBuild!` | Same, and start a new baseline to compare against. |
 

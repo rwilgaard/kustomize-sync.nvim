@@ -209,7 +209,10 @@ Call `setup()` once. Defaults: >lua
                          appear under their full path. A directory nothing
                          is listed from yet is one folded line, e.g.
                          `▸ loose/ (2 yaml)`; <Space> or <CR> on it opens
-                         it, and on an entry toggles it.
+                         it, and on an entry toggles it. Each toggle is
+                         written straight away and shows in the
+                         kustomization if you have it open; `format_command`
+                         runs once, when the menu closes.
 
                                                                *:KustomizeBuild*
 :KustomizeBuild          Render the kustomization for the active buffer's
