@@ -26,6 +26,14 @@ M.defaults = {
       close        = "q",
     },
   },
+  -- Flag entries in an open kustomization that point at nothing or would
+  -- break `kustomize build`, and hint at files on disk that aren't listed.
+  diagnostics = {
+    enabled = true,
+    -- The hint naming files on disk that aren't listed. Off leaves only the
+    -- errors and warnings about entries that are.
+    unlisted = true,
+  },
   integrations = {
     neo_tree = {
       enabled = true,

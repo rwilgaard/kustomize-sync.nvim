@@ -13,6 +13,8 @@ M.setup = function(opts)
     local ok, mod = pcall(require, "kustomize-sync.integrations.oil")
     if ok then mod.setup() end
   end
+
+  require("kustomize-sync.diagnostics").setup()
 end
 
 -- A sync that had to create the kustomization has made a new file, the same as

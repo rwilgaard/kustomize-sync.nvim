@@ -28,6 +28,16 @@ local function map_navigation(menu, next_keys, prev_keys)
   end
 end
 
+-- Reload the kustomization where it is open, so a toggle shows in the file
+-- as it is made rather than when the menu closes. checktime and not
+-- ctx.refresh: the menu is the current window, and a refresh that runs
+-- `:edit` would load the file into it. A buffer with unsaved changes is left
+-- alone, with Neovim's own warning.
+local function show_write(file)
+  local buf = vim.fn.bufnr(file)
+  if buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) then pcall(vim.cmd.checktime, buf) end
+end
+
 M.interactive_sync = function(ctx, opts)
   if not sync.require_cli("yq") then return end
   local dir = sync.ctx_dir(ctx)
@@ -156,6 +166,7 @@ M.interactive_sync = function(ctx, opts)
     else
       sync.execute_yq(row.is_active and "remove" or "add", row.name, target, opts)
       wrote = true
+      show_write(target)
       -- Unticking the last file listed out of a directory makes it one that
       -- nothing is listed out of. Keep it open rather than folding it away
       -- under the cursor.
@@ -172,7 +183,10 @@ M.interactive_sync = function(ctx, opts)
   map_navigation(menu, { "j", "<Down>", "<Tab>" }, { "k", "<Up>", "<S-Tab>" })
 
   menu:on("BufLeave", function()
-    if wrote then sync.run_formatter(target, opts) end
+    if wrote then
+      sync.run_formatter(target, opts)
+      sync.announce_write()
+    end
     if ctx.refresh then ctx.refresh() end
   end)
 end

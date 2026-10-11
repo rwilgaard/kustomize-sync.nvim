@@ -8,8 +8,9 @@ CONTENTS                                                *kustomize-sync-contents
   3. Setup ................... |kustomize-sync-setup|
   4. Commands ................ |kustomize-sync-commands|
   5. Build window ............ |kustomize-sync-build|
-  6. Integrations ............ |kustomize-sync-integrations|
-  7. Healthcheck ............. |kustomize-sync-health|
+  6. Diagnostics ............. |kustomize-sync-diagnostics|
+  7. Integrations ............ |kustomize-sync-integrations|
+  8. Healthcheck ............. |kustomize-sync-health|
 
 ==============================================================================
 1. INTRODUCTION                                     *kustomize-sync-introduction*
@@ -151,6 +152,7 @@ Call `setup()` once. Defaults: >lua
           close        = "q",
         },
       },
+      diagnostics = { enabled = true, unlisted = true },
       integrations = {
         neo_tree = { enabled = true, auto_prompt_on_change = true },
         oil      = { enabled = true, auto_prompt_on_change = true },
@@ -188,6 +190,10 @@ Call `setup()` once. Defaults: >lua
                          Each action takes a string, a list of strings, or
                          `false` to leave it unmapped. Actions you don't
                          name keep their defaults.
+`diagnostics.enabled`    Flag broken entries in an open kustomization, see
+                         |kustomize-sync-diagnostics|.
+`diagnostics.unlisted`   The hint naming files on disk that aren't listed.
+                         `false` keeps only the errors and warnings.
 
 ==============================================================================
 4. COMMANDS                                             *kustomize-sync-commands*
@@ -203,7 +209,10 @@ Call `setup()` once. Defaults: >lua
                          appear under their full path. A directory nothing
                          is listed from yet is one folded line, e.g.
                          `▸ loose/ (2 yaml)`; <Space> or <CR> on it opens
-                         it, and on an entry toggles it.
+                         it, and on an entry toggles it. Each toggle is
+                         written straight away and shows in the
+                         kustomization if you have it open; `format_command`
+                         runs once, when the menu closes.
 
                                                                *:KustomizeBuild*
 :KustomizeBuild          Render the kustomization for the active buffer's
@@ -271,7 +280,50 @@ what you wanted, `D` (or `:KustomizeBuild!`) moves the baseline forward so
 the next one measures from there.
 
 ==============================================================================
-6. INTEGRATIONS                                     *kustomize-sync-integrations*
+6. DIAGNOSTICS                                       *kustomize-sync-diagnostics*
+
+An open kustomization is checked against the disk and the results are shown
+as ordinary diagnostics, so |vim.diagnostic.open_float()|, `]d` and your
+statusline all work on them. Nothing is written.
+
+Errors, which `kustomize build` fails on:
+
+- a path that doesn't exist, under `resources`, `patches`, the generators
+  or any other key that names a file
+- a directory with no kustomization file in it
+- a `kind: Component` under `resources`, or a plain kustomization under
+  `components`
+- the same resource listed twice (`foo`, `./foo` and `foo/` are one entry)
+
+Warnings, which may be fine:
+
+- a file listed by path inside a directory that is also listed whole. The
+  build fails if that directory's kustomization lists the file too.
+- a resource that is also a patch or a generator input
+
+One hint sits on the `resources:` line and names the files and directories
+`:KustomizeSync` would add: >
+    Not listed: deploy/svc.yaml, ingress.yaml
+<
+Remote refs and entries you commented out are left alone, the same as in a
+sync.
+
+The buffer's text is what gets checked, saved or not, a moment after you stop
+typing. While the yaml doesn't parse, the last results stay up. The hint
+needs a directory scan, so it is refreshed when the file is opened or
+written rather than on every edit. Entering the buffer refreshes it too, if
+something was added to or removed from the kustomization's directory since.
+A file added further down, in a directory listed by path, shows up on the
+next write.
+
+Drop the hint alone with `diagnostics = { unlisted = false }`, or turn it
+all off with `diagnostics = false`.
+
+A url is never checked, under any key. If the file holds several yaml
+documents, only the first is.
+
+==============================================================================
+7. INTEGRATIONS                                     *kustomize-sync-integrations*
 
 With Neo-tree or Oil installed the prompts need no setup. To run the
 commands on whatever is under the cursor in the explorer, bind them to keys.
@@ -300,7 +352,7 @@ cursor: >lua
 <
 
 ==============================================================================
-7. HEALTHCHECK                                           *kustomize-sync-health*
+8. HEALTHCHECK                                           *kustomize-sync-health*
 
 Verify external CLI dependencies: >
     :checkhealth kustomize-sync
