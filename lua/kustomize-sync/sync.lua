@@ -125,39 +125,61 @@ end
 -- adding it to .resources makes `kustomize build` fail on a duplicate resource id
 -- or apply the patch as a resource of its own.
 --
--- Written as a sum of arrays so a missing key contributes an empty list rather
--- than an error.
-local REFERENCED_FILTER = [[
-  (.components // [])
-+ (.bases // [])
-+ (.crds // [])
-+ (.configurations // [])
-+ (.transformers // [])
-+ (.generators // [])
-+ (.patchesStrategicMerge // [])
-+ ((.patches // []) | map(select(tag == "!!str")))
-+ ((.patches // []) | map(select(tag == "!!map") | .path))
-+ ((.patchesJson6902 // []) | map(.path))
-+ ((.configMapGenerator // []) | map((.files // []) + (.envs // []) + [.env]) | flatten)
-+ ((.secretGenerator // []) | map((.files // []) + (.envs // []) + [.env]) | flatten)
-+ ((.replacements // []) | map(.path))
-+ ((.helmCharts // []) | map(.valuesFile))
-+ [.openapi.path]
-| map(select(. != null))
-]]
+-- One row per place a path can sit: the key it is reported under, and a yq
+-- expression giving an array of what that place holds. Each expression falls
+-- back to an empty list, so a missing key contributes nothing rather than an
+-- error. The diagnostics read the same rows, one entry at a time, and go by
+-- the flags: `remote` where an entry may point off this machine, `dir` where
+-- it may be a directory with a kustomization, `keyed` where it may be written
+-- `key=path`.
+M.REFERENCED_KEYS = {
+  { key = "components", expr = "(.components // [])", remote = true, dir = true },
+  { key = "bases", expr = "(.bases // [])", remote = true, dir = true },
+  { key = "crds", expr = "(.crds // [])" },
+  { key = "configurations", expr = "(.configurations // [])" },
+  { key = "transformers", expr = "(.transformers // [])", remote = true },
+  { key = "generators", expr = "(.generators // [])", remote = true },
+  { key = "patchesStrategicMerge", expr = "(.patchesStrategicMerge // [])" },
+  { key = "patches", expr = '((.patches // []) | map(select(tag == "!!str")))' },
+  { key = "patches", expr = '((.patches // []) | map(select(tag == "!!map") | .path))' },
+  { key = "patchesJson6902", expr = "((.patchesJson6902 // []) | map(.path))" },
+  { key = "configMapGenerator", keyed = true,
+    expr = "((.configMapGenerator // []) | map((.files // []) + (.envs // []) + [.env]) | flatten)" },
+  { key = "secretGenerator", keyed = true,
+    expr = "((.secretGenerator // []) | map((.files // []) + (.envs // []) + [.env]) | flatten)" },
+  { key = "replacements", expr = "((.replacements // []) | map(.path))" },
+  { key = "helmCharts", expr = "((.helmCharts // []) | map(.valuesFile))" },
+  { key = "openapi", expr = "[.openapi.path]" },
+}
 
--- Normalize a path written in a kustomization to one relative to its own
--- directory. Returns nil for anything that isn't a path inside that directory.
-local function local_path(value, dir)
+-- .resources as a row of the same shape. Kept out of the list above, which is
+-- everything *but* .resources.
+M.RESOURCES_KEY = { key = "resources", expr = "(.resources // [])", remote = true, dir = true }
+
+local REFERENCED_FILTER = table.concat(
+  vim.tbl_map(function(row) return row.expr end, M.REFERENCED_KEYS), " + "
+) .. " | map(select(. != null))"
+
+-- A value written in a kustomization, as the path it names: no trailing slash,
+-- no leading `./`. Nil for anything that isn't a path. `keyed` strips the key
+-- a generator file or env entry may carry: `app.conf=configs/app.conf`.
+M.entry_path = function(value, keyed)
   if type(value) ~= "string" then return nil end
   -- patchesStrategicMerge accepts an inline patch in the same field a path would
   -- use, and an inline patch is a multi-line string.
   if value:find("\n") then return nil end
 
-  -- Generator file and env entries may carry a key: `app.conf=configs/app.conf`.
-  local path = value:match("^[^=/]+=(.+)$") or value
+  local path = keyed and value:match("^[^=/]+=(.+)$") or value
   path = path:gsub("/+$", ""):gsub("^%./", "")
   if path == "" then return nil end
+  return path
+end
+
+-- Normalize a path written in a kustomization to one relative to its own
+-- directory. Returns nil for anything that isn't a path inside that directory.
+M.local_path = function(value, dir)
+  local path = M.entry_path(value, true)
+  if not path then return nil end
 
   -- An absolute path can still land inside the directory. Anything else there,
   -- and anything reached through `../`, is outside it and not ours to judge.
@@ -178,10 +200,14 @@ M.referenced_paths = function(kustomize_file)
   local out = M.yq({ REFERENCED_FILTER, kustomize_file, "-o", "json" })
   if not out then return nil end
 
-  local dir = vim.fn.fnamemodify(kustomize_file, ":h")
+  return M.local_paths(vim.fn.json_decode(out) or {}, vim.fn.fnamemodify(kustomize_file, ":h"))
+end
+
+-- The same set from values already read out of the kustomization.
+M.local_paths = function(values, dir)
   local set = {}
-  for _, value in ipairs(vim.fn.json_decode(out) or {}) do
-    local path = local_path(value, dir)
+  for _, value in ipairs(values) do
+    local path = M.local_path(value, dir)
     if path then set[path] = true end
   end
   return set
@@ -380,6 +406,34 @@ M.scan_entries = function(dir, kustomize_file, resources, opts)
     end
   end
   return entries, loose
+end
+
+-- The names sync would add: on disk, addable, and not in `resources`. Sorted,
+-- so the order entries land in doesn't depend on table iteration, which shows
+-- when sort_resources is off. Nil if the scan failed.
+--
+-- A directory nothing is listed out of is only looked into when files there
+-- would be listed by path anyway. Otherwise it needs a kustomization first,
+-- and creating one is the explorer prompt's to offer, not sync's.
+--
+-- `referenced` is what referenced_paths returns; pass it when it is already
+-- in hand to save the yq call.
+M.unlisted_entries = function(dir, kustomize_file, resources, referenced)
+  local disk_map = M.scan_entries(dir, kustomize_file, resources, {
+    referenced = referenced,
+    loose = M.preferred_style(kustomize_file, resources) == "path",
+  })
+  if not disk_map then return nil end
+
+  local listed = {}
+  for _, r in ipairs(resources) do listed[r] = true end
+
+  local names = {}
+  for name, addable in pairs(disk_map) do
+    if addable and not listed[name] then table.insert(names, name) end
+  end
+  table.sort(names)
+  return names
 end
 
 -- yq can leave blank lines behind; a kustomization this plugin has touched
@@ -600,6 +654,8 @@ end
 -- once per resource, and a formatter alongside it would be a process spawn each
 -- time.
 --
+-- Ends by announcing the write, see announce_write.
+--
 -- Returns false if any write failed. Each failure has already been notified;
 -- the return is for callers that would otherwise report success.
 M.apply_changes = function(items, opts)
@@ -621,7 +677,26 @@ M.apply_changes = function(items, opts)
   for kustomize_file in pairs(touched) do
     M.run_formatter(kustomize_file, opts)
   end
+  if next(touched) then M.announce_write() end
   return ok
+end
+
+-- Says a batch of writes is done, as the `User KustomizeSyncWritten` event.
+-- A write can settle what an open kustomization is flagged for, say a
+-- directory that just got its own kustomization, without touching that
+-- buffer, and the diagnostics listen for this to look again. Fire it once per
+-- batch, where run_formatter is called, not per resource.
+M.announce_write = function()
+  vim.api.nvim_exec_autocmds("User", { pattern = "KustomizeSyncWritten", modeline = false })
+end
+
+-- Where an entry written in the kustomization in `dir` points, and what is
+-- there: the path and its stat, nil when nothing is. The one place that turns
+-- an entry into a path, so sync and the diagnostics can't disagree about
+-- whether something exists.
+M.entry_target = function(dir, rel)
+  local path = rel:sub(1, 1) == "/" and rel or dir .. "/" .. rel
+  return path, vim.uv.fs_stat(path)
 end
 
 -- Whether a listed resource has nothing behind it any more. Decided by a stat
@@ -630,8 +705,8 @@ end
 -- `../base`, a `deploy/svc.yaml`, a json manifest, a symlinked directory.
 -- Removing whatever the scan didn't recognise strips those out.
 local function is_stale(dir, r)
-  local path = r:sub(1, 1) == "/" and r or dir .. "/" .. r
-  return vim.uv.fs_stat(path) == nil and not M.is_remote(r)
+  local _, stat = M.entry_target(dir, r)
+  return stat == nil and not M.is_remote(r)
 end
 
 M.sync = function(ctx, opts)
@@ -657,27 +732,15 @@ M.sync = function(ctx, opts)
     created = true
   end
 
-  local current_resources, res_map = M.current_resources(target)
-  if not current_resources or not res_map then return end
+  local current_resources = M.current_resources(target)
+  if not current_resources then return end
 
-  -- A directory nothing is listed out of is only looked into when files there
-  -- would be listed by path anyway. Otherwise it needs a kustomization first,
-  -- and creating one is the explorer prompt's to offer, not this command's.
-  local disk_map = M.scan_entries(dir, target, current_resources, {
-    loose = M.preferred_style(target, current_resources) == "path",
-  })
-  if not disk_map then return end
-
-  -- Sorted so the order entries land in doesn't depend on table iteration,
-  -- which shows when sort_resources is off.
-  local names = vim.tbl_keys(disk_map)
-  table.sort(names)
+  local unlisted = M.unlisted_entries(dir, target, current_resources)
+  if not unlisted then return end
 
   local changes = {}
-  for _, name in ipairs(names) do
-    if disk_map[name] and not res_map[name] then
-      table.insert(changes, { op = "add", name = name, kustomize_file = target })
-    end
+  for _, name in ipairs(unlisted) do
+    table.insert(changes, { op = "add", name = name, kustomize_file = target })
   end
 
   for _, r in ipairs(current_resources) do

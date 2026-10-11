@@ -172,7 +172,10 @@ M.interactive_sync = function(ctx, opts)
   map_navigation(menu, { "j", "<Down>", "<Tab>" }, { "k", "<Up>", "<S-Tab>" })
 
   menu:on("BufLeave", function()
-    if wrote then sync.run_formatter(target, opts) end
+    if wrote then
+      sync.run_formatter(target, opts)
+      sync.announce_write()
+    end
     if ctx.refresh then ctx.refresh() end
   end)
 end

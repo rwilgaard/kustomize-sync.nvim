@@ -131,6 +131,10 @@ require("kustomize-sync").setup({
       close        = "q",
     },
   },
+  diagnostics = {
+    enabled = true,      -- flag broken entries, see below
+    unlisted = true,     -- hint at files on disk that aren't listed
+  },
   integrations = {
     neo_tree = { enabled = true, auto_prompt_on_change = true },
     oil      = { enabled = true, auto_prompt_on_change = true },
@@ -163,6 +167,33 @@ d                 side-by-side diff
 ```
 
 The keys only apply inside the build window and its diff tab.
+
+## Diagnostics
+
+Open a kustomization and the entries that would break `kustomize build` are
+flagged, as ordinary Neovim diagnostics:
+
+```yaml
+resources:               # hint: Not listed: ingress.yaml
+  - deploy.yaml
+  - gone.yaml            # error: no such file or directory
+  - apps                 # error: apps has no kustomization file
+  - shared               # error: shared is a Component; list it under components
+  - deploy.yaml          # error: listed twice (first on line 2)
+patches:
+  - path: typo.yaml      # error: no such file or directory
+```
+
+Paths are checked under every key that names a file, not only `resources`.
+Two things get a warning rather than an error, since they can be deliberate:
+a file listed by path inside a directory that is also listed whole, and a
+resource that is also a patch or generator input.
+
+The check runs on the buffer as you edit it, saved or not. The hint about
+unlisted files is refreshed when you open or write the file, and when you
+come back to it after its directory changed. Set
+`diagnostics.unlisted = false` to drop the hint and keep the rest, or
+`diagnostics = false` to turn it all off.
 
 ## Subdirectories: whole or by path
 
